@@ -13,9 +13,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from robot.errors import (ExecutionFailed, ExecutionPassed, ExitForLoop,
-                          ContinueForLoop, DataError, PassExecution,
-                          ReturnFromKeyword, UserKeywordExecutionFailed,
+from robot.errors import (ExecutionFailed, ExecutionPassed, ExecutionSkipped,
+                          ExitForLoop, ContinueForLoop, DataError, PassExecution,
+                          ReturnFromKeyword, SkipExecution, UserKeywordExecutionFailed,
                           VariableError)
 from robot.result import Keyword as KeywordResult
 from robot.utils import DotDict, prepr, split_tags_from_doc
@@ -147,6 +147,8 @@ class UserKeywordRunner(object):
         except ExecutionPassed as exception:
             pass_ = exception
             error = exception.earlier_failures
+        except ExecutionSkipped as exception:
+            pass_ = exception
             if error:
                 error.continue_on_failure = False
         except ExecutionFailed as exception:

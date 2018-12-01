@@ -27,11 +27,12 @@ from .htmlreader import HtmlReader
 from .tsvreader import TsvReader
 from .txtreader import TxtReader
 from .restreader import RestReader
-
+from .xlreader import XlReader
 
 READERS = {'html': HtmlReader, 'htm': HtmlReader, 'xhtml': HtmlReader,
            'tsv': TsvReader , 'rst': RestReader, 'rest': RestReader,
-           'txt': TxtReader, 'robot': TxtReader}
+           'txt': TxtReader, 'robot': TxtReader,
+           'xlsx': XlReader, 'xls': XlReader}
 
 # Hook for external tools for altering ${CURDIR} processing
 PROCESS_CURDIR = True

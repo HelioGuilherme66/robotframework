@@ -14,6 +14,7 @@ import sys
 import time
 import urllib
 import zipfile
+import tarfile
 
 from invoke import task, run
 
@@ -25,7 +26,7 @@ VERSION_FILE = os.path.join('src', 'robot', 'version.py')
 
 
 @task(default=True)
-def help():
+def help(ctx):
     """Show help, basically an alias for --help.
 
     This task can be removed once the fix to this issue is released:
@@ -35,7 +36,7 @@ def help():
 
 
 @task
-def tag_release(version):
+def tag_release(ctx, version):
     """Tag specified release.
 
     Updates version using `set_version`, creates tag, and pushes changes.
@@ -46,7 +47,7 @@ def tag_release(version):
 
 
 @task
-def set_version(version, push=False):
+def set_version(ctx, version, push=False):
     """Set version in `src/robot/version.py`.
 
     Version can have these values:
@@ -78,6 +79,7 @@ def set_version(version, push=False):
                    'Updated version to {}'.format(version), push=True)
     return version
 
+
 def validate_version(version):
     if version == 'dev':
         version = get_dev_version()
@@ -87,6 +89,7 @@ def validate_version(version):
         raise ValueError("Invalid version '{}'.".format(version))
     return version
 
+
 def get_dev_version():
     previous = get_version_from_file()
     major, minor, pre = VERSION_RE.match(previous).groups()[1:4]
@@ -94,24 +97,29 @@ def get_dev_version():
         minor = '.{}'.format(int(minor[1:]) + 1 if minor else 1)
     return '{}{}.dev'.format(major, minor)
 
+
 def write_version_file(version):
     update_file(VERSION_FILE, "VERSION = '.*'", version)
+
 
 def write_pom_file(version):
     update_file('pom.xml', '<version>.*</version>', version)
 
+
 def update_file(path, pattern, replacement):
-    replacement = pattern.replace('.*', replacement )
+    replacement = pattern.replace('.*', replacement)
     with open(path) as version_file:
         content = ''.join(re.sub(pattern, replacement, line)
                           for line in version_file)
     with open(path, 'w') as version_file:
         version_file.write(content)
 
+
 def get_version_from_file():
     namespace = {}
     execfile(VERSION_FILE, namespace)
     return namespace['get_version']()
+
 
 def git_commit(paths, message, push=False):
     paths = paths if isinstance(paths, basestring) else ' '.join(paths)
@@ -121,7 +129,7 @@ def git_commit(paths, message, push=False):
 
 
 @task
-def clean(remove_dist=True, create_dirs=False):
+def clean(ctx, remove_dist=True, create_dirs=False):
     """Clean workspace.
 
     By default deletes 'build' and 'dist' directories and removes '*.pyc'
@@ -144,17 +152,18 @@ def clean(remove_dist=True, create_dirs=False):
 
 
 @task
-def sdist(deploy=False, remove_dist=False):
+def sdist(ctx, deploy=False, remove_dist=False):
     """Create source distribution.
 
     Args:
         deploy:       Register and upload sdist to PyPI.
         remove_dist:  Control is 'dist' directory initially removed or not.
     """
-    clean(remove_dist, create_dirs=True)
+    clean(ctx, remove_dist, create_dirs=True)
     run('python setup.py sdist --force-manifest'
         + (' register upload' if deploy else ''))
     announce()
+
 
 def announce():
     print
@@ -164,7 +173,7 @@ def announce():
 
 
 @task
-def wininst(remove_dist=False):
+def wininst(ctx, remove_dist=False):
     """Create Windows installer.
 
     Args:
@@ -177,7 +186,7 @@ def wininst(remove_dist=False):
 
 
 @task
-def jar(jython_version='2.5.3', remove_dist=False):
+def jar(ctx, jython_version='2.7.0', remove_dist=False):
     """Create JAR distribution.
 
     Downloads Jython JAR if needed.
@@ -188,15 +197,19 @@ def jar(jython_version='2.5.3', remove_dist=False):
             `jython-standalone-<version>.jar` found from Maven central.
             Currently `2.5.3` by default.
     """
-    clean(remove_dist, create_dirs=True)
+    clean(ctx, remove_dist, create_dirs=True)
     jython_jar = get_jython_jar(jython_version)
     print 'Using {}'.format(jython_jar)
-    compile_java_files(jython_jar)
+    compile_java_files(ctx, jython_jar)
     unzip_jar(jython_jar)
     copy_robot_files()
+    xlrd_targz = get_xlrd()
+    untar_xlrd(xlrd_targz)
+    move_xlrd()
     compile_python_files(jython_jar)
     create_robot_jar(get_version_from_file())
     announce()
+
 
 def get_jython_jar(version):
     lib = 'ext-lib'
@@ -211,22 +224,60 @@ def get_jython_jar(version):
     urllib.urlretrieve(url, jar)
     return jar
 
-def compile_java_files(jython_jar, build_dir='build'):
+
+def get_xlrd(version='1.1.0'):
+    lib = 'ext-lib'
+    xlrd_targz = os.path.join(lib, 'xlrd-{}.tar.gz'.format(version))
+    if os.path.exists(xlrd_targz):
+        return xlrd_targz
+    url = ('https://files.pythonhosted.org/packages/'
+           '86/cf/bb010f16cefa8f26ac9329ca033134bcabc7a27f5c3d8de961bacc0f80b3/'
+           'xlrd-{}.tar.gz').format(version)
+    print 'Xlrd not found, downloading it from {}.'.format(url)
+    if not os.path.exists(lib):
+        os.mkdir(lib)
+    urllib.urlretrieve(url, xlrd_targz)
+    return xlrd_targz
+
+
+def untar_xlrd(path, target='build'):
+    tar = tarfile.open(path)
+    tar.extractall(target)
+    tar.close()
+
+
+def move_xlrd(version='1.1.0', build_dir='build'):
+    src = os.path.join(build_dir, 'xlrd-{}'.format(version), 'xlrd')
+    dest = os.path.join(build_dir, 'Lib', 'xlrd')
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns('examples'))
+    shutil.rmtree(os.path.join(build_dir, 'xlrd-{}'.format(version)))
+
+
+def compile_java_files(ctx, jython_jar, build_dir='build'):
     root = os.path.join('src', 'java', 'org', 'robotframework')
     files = [os.path.join(root, name) for name in os.listdir(root)
              if name.endswith('.java')]
     print 'Compiling {} Java files.'.format(len(files))
-    run('javac -d {target} -target 1.5 -source 1.5 -cp {cp} {files}'.format(
+    ctx.run('javac -d {target} -target 1.8 -source 1.8 -cp {cp} {files}'.format(
         target=build_dir, cp=jython_jar, files=' '.join(files)))
+
 
 def unzip_jar(path, target='build'):
     zipfile.ZipFile(path).extractall(target)
+
 
 def copy_robot_files(build_dir='build'):
     source = os.path.join('src', 'robot')
     target = os.path.join(build_dir, 'Lib', 'robot')
     shutil.copytree(source, target, ignore=shutil.ignore_patterns('*.pyc'))
     shutil.rmtree(os.path.join(target, 'htmldata', 'testdata'))
+
+
+def copy_xlrd(build_dir='build'):
+    source = os.path.join('src', 'robot')
+    target = os.path.join(build_dir, 'xlrd')
+    shutil.copytree(source, target, ignore=shutil.ignore_patterns('*.pyc'))
+
 
 def compile_python_files(jython_jar, build_dir='build'):
     run('java -jar {} -m compileall {}'.format(jython_jar, build_dir))
@@ -236,10 +287,12 @@ def compile_python_files(jython_jar, build_dir='build'):
             if name.endswith('.py'):
                 os.remove(os.path.join(directory, name))
 
+
 def create_robot_jar(version, source='build'):
     write_manifest(version, source)
     target = os.path.join('dist', 'robotframework-{}.jar'.format(version))
     run('jar cvfM {} -C {} .'.format(target, source))
+
 
 def write_manifest(version, build_dir='build'):
     with open(os.path.join(build_dir, 'META-INF', 'MANIFEST.MF'), 'w') as mf:
@@ -252,7 +305,7 @@ Implementation-Version: {version}
 
 
 @task
-def release_notes(version=get_version_from_file(), login=None, password=None):
+def release_notes(ctx, version=get_version_from_file(), login=None, password=None):
     """Create release notes template based on issues on GitHub.
 
     Requires PyGithub <https://github.com/jacquev6/PyGithub>. Install it with:
@@ -267,31 +320,38 @@ def release_notes(version=get_version_from_file(), login=None, password=None):
     issues = _get_issues(version, login, password)
     _print_header("Robot Framework {}".format(version), level=1)
     _print_intro(version)
-    _print_if_label("Most important enhancements", issues, "prio-critical", "prio-high")
+    _print_if_label("Most important enhancements",
+                    issues, "prio-critical", "prio-high")
     _print_if_label("Backwards incompatible changes", issues, "bwic")
     _print_if_label("Deprected features", issues, "depr")
     _print_header("Acknowledgements")
     print("*UPDATE* based on AUTHORS.txt.")
     _print_issue_table(issues, version)
 
+
 def _get_issues(version, login=None, password=None):
     try:
         from github import Github
     except ImportError:
         sys.exit("You need to install PyGithub:\n\tpip install PyGithub\n")
-    repo = Github(login_or_token=login, password=password).get_repo("robotframework/robotframework")
+    repo = Github(login_or_token=login, password=password).get_repo(
+        "robotframework/robotframework")
     return sorted(Issue(issue) for issue in repo.get_issues(milestone=_get_milestone(repo, version), state="all"))
+
 
 def _get_milestone(repo, milestone):
     for m in repo.get_milestones(state="all"):
         if m.title == milestone:
             return m
-    raise AssertionError("Milestone {} not found from repository {}!".format(milestone, repo.name))
+    raise AssertionError(
+        "Milestone {} not found from repository {}!".format(milestone, repo.name))
+
 
 def _print_header(header, level=2):
     if level > 1:
         print
-    print "{} {}\n".format('#'*level, header)
+    print "{} {}\n".format('#' * level, header)
+
 
 def _print_if_label(header, issues, *labels):
     filtered = [issue for issue in issues
@@ -301,6 +361,7 @@ def _print_if_label(header, issues, *labels):
         print '*EXPLAIN* or remove these.\n'
         for issue in filtered:
             print "* {} {}".format(issue.id, issue.summary)
+
 
 def _print_intro(version):
     print """
@@ -316,6 +377,7 @@ If you have pip just run `pip install --update robotframework`. Otherwise see \
 [installation instructions](https://github.com/robotframework/robotframework/blob/master/INSTALL.rst).
 """.format(version=version, date=time.strftime("%A %B %d, %Y")).strip()
 
+
 def _print_issue_table(issues, version):
     _print_header("Full list of fixes and enhancements")
     print "ID  | Type | Priority | Summary"
@@ -328,7 +390,7 @@ def _print_issue_table(issues, version):
 
 
 @task
-def print_issues(version=get_version_from_file(), login=None, password=None):
+def print_issues(ctx, version=get_version_from_file(), login=None, password=None):
     """Get issues from GitHub issue tracker.
 
     Requires PyGithub <https://github.com/jacquev6/PyGithub>. Install it with:
